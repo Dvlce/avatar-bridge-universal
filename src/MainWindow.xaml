@@ -1,0 +1,37 @@
+﻿<Window x:Class="AvatarBridge.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Avatar Bridge" Width="1080" Height="800" MinWidth="820" MinHeight="620" Background="#11161C" FontFamily="Segoe UI" FontSize="13" WindowStartupLocation="CenterScreen" AllowDrop="True" Drop="FilesDropped" DragOver="FilesDragOver">
+  <Grid Margin="20">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Grid Margin="0,0,0,16"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+      <TextBlock Text="Avatar Bridge · Universale" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
+      <StackPanel Grid.Column="1" Orientation="Horizontal">
+        <ComboBox x:Name="TargetGame" Width="185" Margin="0,0,8,0" SelectionChanged="TargetChanged"><ComboBoxItem Content="Garry's Mod" Tag="gmod"/><ComboBoxItem Content="Cyberpunk 2077" Tag="cyberpunk"/><ComboBoxItem Content="GLB universale (export)" Tag="portable"/></ComboBox>
+        <Button Content="Cartella gioco…" Click="BrowseGame" Margin="0,0,8,0"/>
+        <Button Content="Aggiornamenti" Click="UpdatesClick" Margin="0"/>
+      </StackPanel>
+    </Grid>
+    <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="230"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Grid><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel>
+          <ComboBox x:Name="Library" SelectionChanged="LibraryChanged" Margin="0,0,0,12" ToolTip="Libreria locale"/>
+          <Button Content="Scegli avatar…" Click="BrowseSource" Margin="0,0,0,12"/>
+          <Button Content="Cartella…" Click="BrowseSourceFolder" Margin="0,0,0,12"/>
+          <TextBlock x:Name="SourceLabel" Text="" FontSize="11" Foreground="#9BAABA" Margin="0,0,0,12" TextTrimming="CharacterEllipsis" MaxHeight="50"/>
+          <ComboBox x:Name="Candidates" DisplayMemberPath="Label" SelectionChanged="CandidateChanged" Margin="0,0,0,12"/>
+          <ComboBox x:Name="Gender" SelectedIndex="0" Margin="0,0,0,14"><ComboBoxItem Content="V femminile"/><ComboBoxItem Content="V maschile"/></ComboBox>
+          <CheckBox x:Name="Lightweight" IsChecked="True" Content="Leggero" Foreground="#EFF3F7" Margin="0,0,0,16"/>
+          <TextBox x:Name="AvatarName" ToolTip="Nome del personaggio" Margin="0,0,0,8" MaxLength="80"/>
+          <TextBox x:Name="AvatarCategory" ToolTip="Categoria nel gioco" Margin="0,0,0,12" MaxLength="60"/>
+          <Button x:Name="PrepareButton" Content="Carica" Click="PrepareClick" IsEnabled="False" Margin="0,0,0,10"/>
+        </StackPanel>
+        <StackPanel Grid.Row="1"><Button x:Name="ProjectButton" Click="InstallClick" IsEnabled="False" Background="#D7F65C" Foreground="#15200B" FontWeight="SemiBold" Margin="0,0,0,10" Padding="12,13"><TextBlock Text="Installa" Foreground="#15200B" FontWeight="SemiBold"/></Button><Button x:Name="UninstallButton" Content="Rimuovi mod" Click="UninstallClick" Margin="0"/></StackPanel>
+      </Grid>
+      <Border Grid.Column="2" Background="#26333F" CornerRadius="8" ClipToBounds="True"><Grid x:Name="PreviewHost" MouseLeftButtonDown="PreviewDown" MouseLeftButtonUp="PreviewUp" MouseMove="PreviewMove" MouseWheel="PreviewWheel" Background="#26333F">
+        <Viewport3D x:Name="Viewport" IsHitTestVisible="False"/><Border x:Name="DropZone" Background="Transparent"><TextBlock x:Name="EmptyPreview" Text="Trascina avatar" FontSize="20" Foreground="#A5B6C7" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+        <Button x:Name="SpinButton" Content="360°" Click="SpinClick" IsEnabled="False" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="12"/>
+      </Grid></Border>
+    </Grid>
+    <StackPanel Grid.Row="2" Margin="0,14,0,0"><TextBlock x:Name="RuntimeState" TextWrapping="Wrap" Foreground="#F0BD78" FontSize="12" Margin="0,0,0,8"/><ProgressBar x:Name="Progress" Height="3" Visibility="Collapsed" IsIndeterminate="True" Foreground="#D7F65C" Margin="0,0,0,8"/><TextBlock x:Name="Status" Text="Pronto" TextWrapping="Wrap" Foreground="#A5B6C7" FontSize="12"/></StackPanel>
+    <StackPanel Visibility="Collapsed"><TextBox x:Name="GamePath" Text="C:\Program Files (x86)\Steam\steamapps\common\Cyberpunk 2077"/><TextBlock x:Name="GameState"/><TextBlock x:Name="CandidatePath"/><TextBlock x:Name="Stats"/><TextBlock x:Name="Stage"/><Button x:Name="ReportButton"/><Button x:Name="OutputButton"/></StackPanel>
+  </Grid>
+</Window>

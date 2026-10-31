@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>AvviaCyberpunk</AssemblyName>
+    <Version>1.0.0</Version>
+    <Description>Avvio diretto locale di Cyberpunk 2077</Description>
+    <ApplicationManifest>../src/app.manifest</ApplicationManifest>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,8 @@
+{
+  "codeware": "a652bbbcf6feb65988c67f15f428e9398a3d827c",
+  "red4ext_sdk": "0f5eba42a4cf3a1161ad3de0b4ed6f1901ec169e",
+  "runtime_sha256": "8cd949b908ef8e3b36ab1e65a002ea42c81a19dec9895d05226d67cbc5160bd2",
+  "game_sha256": "d36e74c47592e9c656ae250078cb40b2be63c782af5bfbeff2280d43e653fab4",
+  "compiled_with": "MSVC 14.51.36231, Windows SDK 10.0.28000.0, xmake 3.1.2",
+  "scope": "Private AB methods for entity components, visibility masks and avatar facial meshes; no ArchiveXL, scripts or other Codeware services."
+}

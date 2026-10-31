@@ -1,0 +1,30 @@
+<Window x:Class="CyberpunkLauncher.MainWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ Title="Avvia Cyberpunk 2077" Width="600" Height="430"
+ WindowStartupLocation="CenterScreen" ResizeMode="CanMinimize"
+ Background="#101720" Foreground="#E2EAF1" FontFamily="Segoe UI">
+ <Grid Margin="32">
+  <Grid.RowDefinitions>
+   <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+   <RowDefinition Height="Auto"/>
+  </Grid.RowDefinitions>
+  <TextBlock Text="NIGHT CITY" Foreground="#51E4DF" FontWeight="SemiBold" FontSize="12"/>
+  <StackPanel Grid.Row="1" Margin="0,14,0,0">
+   <TextBlock Text="Cyberpunk 2077" FontSize="34" FontWeight="Bold"/>
+   <TextBlock Text="Avvio diretto · Avatar Bridge" Foreground="#8FA7B8" FontSize="15" Margin="0,7,0,0"/>
+  </StackPanel>
+  <Border Grid.Row="2" Margin="0,22,0,22" Background="#19232F" Padding="16">
+   <StackPanel VerticalAlignment="Center">
+    <TextBlock x:Name="Status" Text="Controllo dei file…" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"/>
+    <TextBlock x:Name="Detail" Text="" Foreground="#A6BDCC" Margin="0,8,0,0" TextWrapping="Wrap" FontSize="13"/>
+   </StackPanel>
+  </Border>
+  <Button x:Name="Play" Grid.Row="3" Content="AVVIA CYBERPUNK" Background="#F5E74D" Foreground="#101720" FontSize="16" Click="PlayClick" IsEnabled="False"/>
+  <DockPanel Grid.Row="4" Margin="0,14,0,0">
+   <Button Content="Gestisci avatar" Click="AvatarClick" Padding="12,8"/>
+   <TextBlock Text="Il launcher usa il gioco già installato." Foreground="#708A9C" VerticalAlignment="Center" HorizontalAlignment="Right" FontSize="11"/>
+  </DockPanel>
+ </Grid>
+</Window>
