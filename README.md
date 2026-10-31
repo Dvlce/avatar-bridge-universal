@@ -1,6 +1,14 @@
 # Avatar Bridge
 
-## Versione universale 0.7.3
+## Versione universale 0.7.4
+
+La 0.7.4 aggiunge la fisica nativa della coda: la radice segue il bacino e
+le sei articolazioni successive del Rexouium usano jigglebone con lunghezza
+conservata, smorzamento e un limite di 25 gradi per segmento. Il ragdoll usa
+15 corpi fisici, comprese mani e piedi, e 14 articolazioni con limiti anatomici
+per collo, busto, spalle, gomiti, polsi, anche, ginocchia e caviglie.
+Gli avatar installati prima di questa versione vanno ricompilati con
+**Installa avatar**, a gioco chiuso.
 
 La 0.7.3 corregge l'orientamento del playermodel GMod: allinea gli assi della
 base al riferimento ValveBiped e salta le articolazioni coincidenti durante
@@ -19,7 +27,7 @@ La libreria sorgente e l'anteprima 360 sono condivise fra gli adattatori:
 - **Garry's Mod**: conversione locale GLB → SMD/QC → StudioMDL → addon,
   rig ValveBiped, animazioni standard, texture VTF/VMT e ragdoll.
   Richiede una base umanoide riconosciuta e Garry's Mod installato da Steam.
-  La coda segue il bacino, senza fisica dedicata; il volto rimane neutro.
+  La coda usa fisica jigglebone nativa; il volto rimane neutro.
   Le mani in prima persona sono quelle standard del gioco. Il risultato
   estetico e le animazioni richiedono una verifica per ogni modello.
 - **Cyberpunk 2077**: conserva la conversione precedente e i suoi requisiti.

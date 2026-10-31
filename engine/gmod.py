@@ -16,7 +16,7 @@ from PIL import Image
 from scipy.spatial.transform import Rotation
 import bridge as b
 
-VERSION = 2
+VERSION = 3
 
 
 def game_root(path):
@@ -321,19 +321,76 @@ def export_mesh(doc, binary, bones, remap, transforms, conversion, matnames, pat
     return count
 
 
+PHYSICS_PARTS = ['Pelvis','Spine2','Head1'] + [side+'_'+part for side in ['L','R']
+    for part in ['UpperArm','Forearm','Hand','Thigh','Calf','Foot']]
+
+
+def tail_dynamics(bones):
+    """Align Source's jiggle +Z axis to the tail, with its root anchored."""
+    indices = [i for i,bone in enumerate(bones) if bone['name'].startswith('AvatarBridge.Tail')]
+    result = []
+    for index in indices:
+        bone = bones[index]
+        children = [i for i in indices if bones[i]['parent']==index]
+        parent = bones[bone['parent']]
+        direction = (bones[children[0]]['world'][:3,3]-bone['world'][:3,3]) if children else bone['world'][:3,3]-parent['world'][:3,3]
+        length = float(np.linalg.norm(direction))
+        if length < .01: continue
+        bone['world'] = bone['world'].copy()
+        bone['world'][:3,:3] = frame(direction,np.array([0.,0.,1.]))[:,[1,2,0]]
+        if bone['parent'] in indices:
+            result.append({'name':bone['name'],'length':length})
+    for index in indices:
+        bone=bones[index]
+        bone['local']=np.linalg.inv(bones[bone['parent']]['world'])@bone['world']
+    return result
+
+
+def physics_qc(bones, tail):
+    names={bone['name'] for bone in bones}
+    limits={'Spine2':[(-48,48),(-25,25),(-25,50)],'Head1':[(-20,20),(-25,25),(-20,30)]}
+    for side in ['L','R']:
+        limits.update({side+'_UpperArm':[(-40,40),(-85,85),(-90,30)],
+            side+'_Forearm':[(0,0),(0,0),(-149,4)],side+'_Hand':[(-40,40),(-15,15),(-60,70)],
+            side+'_Thigh':[(-12,12),(-73,6) if side=='L' else (-8,75),(-95,32)],
+            side+'_Calf':[(0,0),(0,0),(-10,126)],side+'_Foot':[(-10,10),(-20,20),(-15,35)]})
+    lines=['$collisionjoints "physics.smd" {','$mass 90','$inertia 10','$damping 0.05','$rotdamping 1.5',
+           '$rootbone "ValveBiped.Bip01_Pelvis"','$animatedfriction 1 400 0.5 0.0 0.3']
+    for name,axes in limits.items():
+        full='ValveBiped.Bip01_'+name
+        if full not in names: continue
+        for axis,(low,high) in zip('xyz',axes):
+            lines.append(f'$jointconstrain "{full}" {axis} limit {low} {high} 0')
+    for side in ['L','R']:
+        for torso in ['Pelvis','Spine2']:
+            lines.append(f'$jointcollide "ValveBiped.Bip01_{side}_Forearm" "ValveBiped.Bip01_{torso}"')
+    for part in ['Thigh','Calf','Foot']:
+        lines.append(f'$jointcollide "ValveBiped.Bip01_L_{part}" "ValveBiped.Bip01_R_{part}"')
+    lines.append('}')
+    for item in tail:
+        lines += [f'$jigglebone "{item["name"]}" {{ is_flexible {{',
+                  f'length {item["length"]:.6f}', 'tip_mass 0.15',
+                  'yaw_stiffness 100','yaw_damping 7','pitch_stiffness 120','pitch_damping 7',
+                  'along_stiffness 200','along_damping 10','angle_constraint 25','} }']
+    return lines
+
+
 def write_physics(bones, path):
     lines = smd_header(bones)+['triangles']
     faces = [(0,2,1),(0,3,2),(4,5,6),(4,6,7),(0,1,5),(0,5,4),
              (1,2,6),(1,6,5),(2,3,7),(2,7,6),(3,0,4),(3,4,7)]
     for index,bone in enumerate(bones):
         suffix = bone['name'].removeprefix('ValveBiped.Bip01_')
-        if suffix not in ['Pelvis','Spine2','Head1','L_UpperArm','R_UpperArm','L_Forearm','R_Forearm','L_Thigh','R_Thigh','L_Calf','R_Calf']:
+        if suffix not in PHYSICS_PARTS:
             continue
         start = bone['world'][:3,3]
         children = [b for b in bones if b['parent']==index and 'ValveBiped.Bip01_' in b['name']]
+        if suffix.endswith('_Hand'):
+            children.sort(key=lambda b:not b['name'].endswith('_Finger2'))
         end = children[0]['world'][:3,3] if children else start+np.array([0,0,5.])
         middle = (start+end)/2
-        size = np.array([3.,3.,max(np.linalg.norm(end-start)*.35,2.)])
+        radius = (1.6,1.6) if suffix.endswith(('_Forearm','_Hand')) else (2.,2.) if suffix.endswith(('_UpperArm','_Calf','_Foot')) else (3.,3.)
+        size = np.array([*radius,max(np.linalg.norm(end-start)*.42,1.5)])
         orient = frame(end-start, np.array([1.,0.,0.]))[:,[1,2,0]]
         points = np.array([[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]])*size
         points = points @ orient.T + middle
@@ -360,6 +417,7 @@ def build(job_path, game_path):
     addon = out/'addon'; content = out/'compile-game'; content.mkdir()
     (content/'gameinfo.txt').write_text('"GameInfo" { game "Avatar Bridge build" FileSystem { SteamAppId 4000 SearchPaths { Game "'+str(root/'garrysmod').replace('\\','/')+'" Game "'+str(root/'hl2').replace('\\','/')+'" } } }',encoding='utf-8')
     bones,remap,transforms,conversion = skeleton(doc,binary,reference_bones(root))
+    tail = tail_dynamics(bones)
     matnames = materials(doc,binary,addon/'materials'/namespace,namespace)
     triangles = export_mesh(doc,binary,bones,remap,transforms,conversion,matnames,out/'reference.smd')
     write_physics(bones,out/'physics.smd')
@@ -367,7 +425,7 @@ def build(job_path, game_path):
     relative_model = 'avatarbridge/'+token+'/player.mdl'
     qc = [f'$modelname "{relative_model}"', '$body "body" "reference.smd"',f'$cdmaterials "{namespace}"',
         '$surfaceprop "flesh"', '$contents "solid"', '$mostlyopaque', '$maxverts 65536',
-        '$sequence "reference" "idle.smd" fps 1', '$includemodel "m_anm.mdl"',
+        '$sequence "reference" "idle.smd" fps 1', '$sequence "ragdoll" "idle.smd" fps 30 activity ACT_DIERAGDOLL 1', '$includemodel "m_anm.mdl"',
         '$includemodel "m_gst.mdl"', '$includemodel "m_pst.mdl"', '$includemodel "m_shd.mdl"',
         '$attachment "eyes" "ValveBiped.Bip01_Head1" 3 -4 0 rotate 0 -80 -90',
         '$attachment "anim_attachment_RH" "ValveBiped.Bip01_R_Hand" 0 0 0 rotate 0 0 0',
@@ -376,7 +434,7 @@ def build(job_path, game_path):
         '$ikchain "lhand" "ValveBiped.Bip01_L_Hand" knee 0.707 0.707 0',
         '$ikchain "rfoot" "ValveBiped.Bip01_R_Foot" knee 0.707 -0.707 0',
         '$ikchain "lfoot" "ValveBiped.Bip01_L_Foot" knee 0.707 -0.707 0',
-        '$collisionjoints "physics.smd" { $mass 90 $inertia 10 $damping 0.01 $rotdamping 1.5 $rootbone "ValveBiped.Bip01_Pelvis" }']
+        *physics_qc(bones,tail)]
     (out/'player.qc').write_text('\n'.join(qc)+'\n',encoding='utf-8')
     proc = subprocess.run([str(tool),'-nop4','-game',str(content),str(out/'player.qc')],cwd=tool.parent,
         capture_output=True,timeout=600,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
@@ -396,7 +454,8 @@ def build(job_path, game_path):
         f'if CLIENT and game.SinglePlayer() then hook.Add("InitPostEntity", "{token}_select", function() RunConsoleCommand("cl_playermodel", "{token}") end) end\n',encoding='utf-8')
     (addon/'addon.json').write_text(json.dumps({'title':title+' - Avatar Bridge','type':'model','tags':['roleplay','fun'],'ignore':['*.log']},indent=2),encoding='utf-8')
     result = {'target':'gmod','builder_version':VERSION,'job':str(job),'addon':str(addon),'token':token,'model':model,
-              'triangles':triangles,'bones':len(bones),'runtime_verified':False,'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
+              'triangles':triangles,'bones':len(bones),'tail_jiggle_bones':len(tail),'physics_bodies':len(PHYSICS_PARTS),
+              'runtime_verified':False,'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
     (job/'gmod-build.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
     return result
 

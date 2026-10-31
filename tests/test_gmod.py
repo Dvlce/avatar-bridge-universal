@@ -14,6 +14,36 @@ from PIL import Image
 
 
 class GmodTests(unittest.TestCase):
+    def test_tail_jiggle_axes_follow_the_chain_without_moving_bind_origins(self):
+        bones=[]
+        for i,position in enumerate([(0,0,40),(0,3,36),(0,10,35),(0,18,33)]):
+            world=np.eye(4); world[:3,3]=position
+            bones.append(dict(name='ValveBiped.Bip01_Pelvis' if i==0 else 'AvatarBridge.Tail'+str(i),
+                              parent=i-1,world=world,local=world.copy()))
+        positions=[b['world'][:3,3].copy() for b in bones]
+        dynamic=gmod.tail_dynamics(bones)
+        self.assertEqual([x['name'] for x in dynamic],['AvatarBridge.Tail2','AvatarBridge.Tail3'])
+        for i in range(1,len(bones)):
+            np.testing.assert_allclose(bones[i]['world'][:3,3],positions[i])
+            np.testing.assert_allclose(bones[i-1]['world']@bones[i]['local'],bones[i]['world'],atol=1e-10)
+            direction=positions[i+1]-positions[i] if i+1<len(bones) else positions[i]-positions[i-1]
+            np.testing.assert_allclose(bones[i]['world'][:3,2],direction/np.linalg.norm(direction),atol=1e-10)
+        qc='\n'.join(gmod.physics_qc(bones,dynamic))
+        self.assertNotIn('$jigglebone "AvatarBridge.Tail1"',qc)
+        self.assertEqual(qc.count('$jigglebone'),2)
+        self.assertIn('angle_constraint 25',qc)
+
+    def test_ragdoll_has_articulated_limbs_and_distinct_hands_and_feet(self):
+        bones=[dict(name='ValveBiped.Bip01_'+name) for name in gmod.PHYSICS_PARTS]
+        qc='\n'.join(gmod.physics_qc(bones,[]))
+        self.assertEqual(len(gmod.PHYSICS_PARTS),15)
+        for name in gmod.PHYSICS_PARTS[1:]:
+            for axis in 'xyz': self.assertIn(f'$jointconstrain "ValveBiped.Bip01_{name}" {axis} limit',qc)
+        self.assertIn('L_Forearm" z limit -149 4',qc)
+        self.assertIn('R_Calf" z limit -10 126',qc)
+        for name in ['L_Hand','R_Hand','L_Foot','R_Foot']:
+            self.assertIn(name,gmod.PHYSICS_PARTS)
+
     def test_frames_are_rotations_even_when_axis_is_parallel_to_forward(self):
         for axis in [np.array([0.,-2.,0.]), np.array([0.,0.,3.]), np.array([2.,1.,.2])]:
             rotation = gmod.frame(axis,np.array([0.,-1.,0.]))
