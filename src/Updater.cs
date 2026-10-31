@@ -113,6 +113,12 @@ if ($targetRoot -eq [IO.Path]::GetPathRoot($targetRoot).TrimEnd('\')) { throw 'I
 Wait-Process -Id $update.Process -Timeout 60 -ErrorAction SilentlyContinue
 if (Get-Process -Id $update.Process -ErrorAction SilentlyContinue) { throw 'Application is still running' }
 New-Item -ItemType Directory -Path $update.Backup -Force | Out-Null
+function Copy-UpdateFile([string]$SourceFile, [string]$DestinationFile) {
+    for ($copyAttempt = 0; $copyAttempt -lt 40; $copyAttempt++) {
+        try { Copy-Item -LiteralPath $SourceFile -Destination $DestinationFile -Force -ErrorAction Stop; return }
+        catch { if ($copyAttempt -eq 39) { throw }; Start-Sleep -Milliseconds 250 }
+    }
+}
 $changedFiles = [Collections.Generic.List[string]]::new()
 try {
     foreach ($file in Get-ChildItem -LiteralPath $sourceRoot -File -Recurse) {
@@ -122,21 +128,24 @@ try {
         $backup = Join-Path $update.Backup $relative
         if (Test-Path -LiteralPath $destination) {
             New-Item -ItemType Directory -Path (Split-Path -Parent $backup) -Force | Out-Null
-            Copy-Item -LiteralPath $destination -Destination $backup
+            Copy-UpdateFile $destination $backup
         }
         $changedFiles.Add($relative)
         New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-        Copy-Item -LiteralPath $file.FullName -Destination $destination -Force
+        Copy-UpdateFile $file.FullName $destination
     }
     'OK' | Set-Content -LiteralPath $update.Log
 } catch {
+    $updateError = $_.Exception.Message
     foreach ($relative in $changedFiles) {
         $backup = Join-Path $update.Backup $relative
         $destination = Join-Path $targetRoot $relative
-        if (Test-Path -LiteralPath $backup) { Copy-Item -LiteralPath $backup -Destination $destination -Force }
-        elseif (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Force }
+        try {
+            if (Test-Path -LiteralPath $backup) { Copy-UpdateFile $backup $destination }
+            elseif (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Force }
+        } catch { $updateError += "`nRollback: " + $_.Exception.Message }
     }
-    $_.Exception.Message | Set-Content -LiteralPath $update.Log
+    $updateError | Set-Content -LiteralPath $update.Log
 }
 Start-Process -FilePath (Join-Path $targetRoot 'AvatarBridge.exe') -WorkingDirectory $targetRoot
 """);
