@@ -13,6 +13,11 @@ from PIL import Image
 
 
 class GmodTests(unittest.TestCase):
+    def test_equivalent_game_paths_share_installation_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)/'GarrysMod'
+            self.assertEqual(gmod.manifest_path(root),gmod.manifest_path(root/'garrysmod'/'..'))
+
     def test_vtf_header_and_pixels_agree(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'texture.vtf'

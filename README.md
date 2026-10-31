@@ -1,6 +1,6 @@
 # Avatar Bridge
 
-## Versione universale 0.7.0
+## Versione universale 0.7.1
 
 Apri **Avatar Bridge - Preview 360** sul desktop. Scegli **Garry's Mod** in alto,
 carica Xeno e premi **Installa avatar** a gioco chiuso. Nel gioco apri il menu C,

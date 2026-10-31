@@ -375,6 +375,7 @@ def build(job_path, game_path):
 
 
 def manifest_path(root):
+    root = Path(root).resolve()
     key = hashlib.sha256(str(root).lower().encode()).hexdigest()[:16]
     return b.DATA/'installations'/('gmod_'+key+'.json')
 
