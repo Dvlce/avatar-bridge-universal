@@ -14,6 +14,43 @@ from PIL import Image
 
 
 class GmodTests(unittest.TestCase):
+    def test_viewmodel_export_keeps_only_avatar_arms_and_their_materials(self):
+        def bone(name,position,parent):
+            world=np.eye(4);world[:3,3]=position
+            return dict(name='ValveBiped.Bip01_'+name,parent=parent,world=world,local=world.copy())
+        body=[bone('Spine4',[0,0,60],-1),bone('L_Hand',[20,0,40],0),bone('R_Hand',[-20,0,40],0),bone('Head1',[0,0,75],0)]
+        hands=[bone('Spine4',[0,0,0],-1),bone('L_Hand',[20,0,-20],0),bone('R_Hand',[-20,0,-20],0)]
+        for bones in [body,hands]:
+            for item in bones:
+                if item['parent']>=0:item['local']=np.linalg.inv(bones[item['parent']]['world'])@item['world']
+        lines=gmod.smd_header(body)+['triangles']
+        for material,index in [('avatar_left',1),('avatar_right',2),('head',3),('torso',0)]:
+            lines.append(material)
+            for dx,dy in [(0,0),(1,0),(0,1)]:
+                point=body[index]['world'][:3,3]+[dx,dy,0]
+                lines.append(f'{index} '+' '.join(str(v) for v in point)+f' 0 0 1 0.25 0.75 1 {index} 1')
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/'body.smd';out=Path(directory)/'hands.smd'
+            source.write_text('\n'.join(lines+['end']))
+            result=gmod.export_hands(source,body,hands,out)
+            self.assertEqual(result['triangles'],2)
+            text=out.read_text().split('triangles\n')[1]
+            self.assertNotIn('torso',text);self.assertNotIn('head',text)
+            self.assertIn('avatar_left',text);self.assertIn('avatar_right',text)
+            first=text.splitlines()[1].split()
+            np.testing.assert_allclose(np.array(first[1:4],dtype=float),[20,0,-20])
+            np.testing.assert_allclose(np.array(first[7:9],dtype=float),[.25,.75])
+
+    def test_viewmodel_qc_freezes_every_bone_for_weapon_bonemerge(self):
+        from scipy.spatial.transform import Rotation
+        world=np.eye(4);world[:3,:3]=Rotation.from_euler('xyz',[25,-40,70],degrees=True).as_matrix()
+        bones=[dict(name='ValveBiped.Bip01_Spine4',parent=-1,world=world,local=world)]
+        qc=gmod.define_bones(bones)
+        self.assertIn('$bonemerge "ValveBiped.Bip01_Spine4"',qc)
+        values=np.array(qc[0].split('"" ')[1].split()[:6],dtype=float)
+        reconstructed=Rotation.from_euler('xyz',values[3:][[2,0,1]],degrees=True).as_matrix()
+        np.testing.assert_allclose(reconstructed,world[:3,:3],atol=1e-9)
+
     def test_leg_segments_meet_at_the_same_knee_without_changing_width(self):
         forward=np.array([0.,-1.,0.])
         hip=np.array([4.,1.,40.]); knee=np.array([4.,0.,23.]); ankle=np.array([4.,3.,4.])

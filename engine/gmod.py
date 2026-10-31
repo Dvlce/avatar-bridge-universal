@@ -16,7 +16,7 @@ from PIL import Image
 from scipy.spatial.transform import Rotation
 import bridge as b
 
-VERSION = 4
+VERSION = 5
 
 
 def game_root(path):
@@ -81,8 +81,7 @@ def vpk_read(directory, wanted):
     raise FileNotFoundError(wanted)
 
 
-def reference_bones(root):
-    wanted = 'models/player/group01/male_07.mdl'
+def reference_bones(root, wanted='models/player/group01/male_07.mdl'):
     loose = root / 'garrysmod' / wanted
     raw = loose.read_bytes() if loose.is_file() else vpk_read(root / 'garrysmod/garrysmod_dir.vpk', wanted)
     if raw[:4] != b'IDST':
@@ -101,6 +100,22 @@ def reference_bones(root):
         world = (bones[parent]['world'] if parent >= 0 else np.eye(4)) @ local
         bones.append({'name': name, 'parent': parent, 'local': local, 'world': world})
     return bones
+
+
+def define_bones(bones):
+    """Freeze the native c_hands bind pose and retain all merge bones."""
+    import warnings
+    lines=[]
+    for bone in bones:
+        parent=bones[bone['parent']]['name'] if bone['parent']>=0 else ''
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            # QC uses pitch/yaw/roll; SMD uses X/Y/Z radians.
+            angles=Rotation.from_matrix(bone['local'][:3,:3]).as_euler('xyz',degrees=True)[[1,2,0]]
+        values=np.r_[bone['local'][:3,3],angles]
+        lines.append(f'$definebone "{bone["name"]}" "{parent}" '+' '.join(f'{x:.8f}' for x in values)+' 0 0 0 0 0 0')
+        lines.append(f'$bonemerge "{bone["name"]}"')
+    return lines
 
 
 def bone_alias(value):
@@ -414,6 +429,64 @@ def export_mesh(doc, binary, bones, remap, transforms, conversion, matnames, pat
     return count
 
 
+def export_hands(body_smd, body_bones, hand_bones, path):
+    """Extract avatar arm triangles and bind them to GMod's native viewmodel rig.
+
+    Geometry comes from the fitted avatar, including its textures and claws.
+    Only the local game's arm skeleton supplies the first-person bind pose.
+    """
+    target={bone['name']:i for i,bone in enumerate(hand_bones)}
+    root='ValveBiped.Bip01_Spine4'
+    if root not in target: raise ValueError('Rig delle mani GMod senza radice Spine4')
+    source_root=next(bone for bone in body_bones if bone['name']==root)
+    fallback=hand_bones[target[root]]['world']@np.linalg.inv(source_root['world'])
+    mapping=[]; transforms=[]; arm=[]
+    for bone in body_bones:
+        name=bone['name']
+        mapping.append(target.get(name,target[root]))
+        transforms.append(hand_bones[target[name]]['world']@np.linalg.inv(bone['world']) if name in target else fallback)
+        arm.append(name in target and name!=root)
+    mapping=np.array(mapping);transforms=np.array(transforms);arm=np.array(arm)
+    source=Path(body_smd).read_text(encoding='utf-8').splitlines()
+    cursor=source.index('triangles')+1;lines=smd_header(hand_bones)+['triangles'];count=0;sides={'L':0,'R':0}
+    while cursor<len(source) and source[cursor]!='end':
+        material=source[cursor]; vertices=[]; influences=[]
+        for line in source[cursor+1:cursor+4]:
+            fields=line.split(); links=int(fields[9])
+            joints=np.array([int(fields[10+2*i]) for i in range(links)])
+            weights=np.array([float(fields[11+2*i]) for i in range(links)])
+            vertices.append((np.array(fields[1:9],dtype=float),joints,weights))
+            influences.append(float(weights[arm[joints]].sum()))
+        cursor+=4
+        # A shoulder cut stays behind the viewmodel camera; no torso/head or
+        # legs may enter the first-person mesh.
+        if min(influences)<.25 or np.mean(influences)<.6: continue
+        lines.append(material)
+        for values,joints,weights in vertices:
+            blend=(transforms[joints]*weights[:,None,None]).sum(0)
+            point=blend[:3,:3]@values[:3]+blend[:3,3]
+            normal=np.linalg.inv(blend[:3,:3]).T@values[3:6];normal/=max(np.linalg.norm(normal),1e-10)
+            dense=np.zeros(len(hand_bones));np.add.at(dense,mapping[joints],weights)
+            chosen=np.argsort(-dense,kind='stable')[:3];amounts=dense[chosen];amounts/=amounts.sum()
+            links=[(int(j),float(w)) for j,w in zip(chosen,amounts) if w>1e-7]
+            result=np.r_[point,normal,values[6:8]]
+            lines.append(str(links[0][0])+' '+' '.join(f'{v:.7f}' for v in result)+' '+str(len(links))+' '+' '.join(f'{j} {w:.8f}' for j,w in links))
+            for side in sides:
+                if any('_'+side+'_' in hand_bones[j]['name'] and w>.1 for j,w in links):sides[side]+=1
+        count+=1
+    if not count or not all(sides.values()): raise ValueError('La base non contiene entrambe le braccia per c_hands.')
+    Path(path).write_text('\n'.join(lines+['end'])+'\n',encoding='utf-8')
+    return {'triangles':count,'bones':len(hand_bones),'left_vertices':sides['L'],'right_vertices':sides['R']}
+
+
+def compile_model(tool, content, qc, log_path, expected):
+    proc=subprocess.run([str(tool),'-nop4','-game',str(content),str(qc)],cwd=tool.parent,
+        capture_output=True,timeout=600,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    log=(proc.stdout+proc.stderr).decode('utf-8','replace');Path(log_path).write_text(log,encoding='utf-8')
+    if proc.returncode or not Path(expected).is_file() or re.search(r'(^|\n)\s*ERROR',log,re.I):
+        raise ValueError('Compilazione GMod fallita. Log: '+str(log_path)+'\n'+log[-3500:])
+
+
 PHYSICS_PARTS = ['Pelvis','Spine2','Head1'] + [side+'_'+part for side in ['L','R']
     for part in ['UpperArm','Forearm','Hand','Thigh','Calf','Foot']]
 
@@ -530,26 +603,34 @@ def build(job_path, game_path):
         '$ikchain "lfoot" "ValveBiped.Bip01_L_Foot" knee 0.707 -0.707 0',
         *physics_qc(bones,tail)]
     (out/'player.qc').write_text('\n'.join(qc)+'\n',encoding='utf-8')
-    proc = subprocess.run([str(tool),'-nop4','-game',str(content),str(out/'player.qc')],cwd=tool.parent,
-        capture_output=True,timeout=600,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-    log = (proc.stdout+proc.stderr).decode('utf-8','replace'); (out/'compile.log').write_text(log,encoding='utf-8')
     compiled = content/'models'/relative_model
-    if proc.returncode or not compiled.is_file() or re.search(r'(^|\n)\s*ERROR',log,re.I):
-        raise ValueError('Compilazione GMod fallita. Log: '+str(out/'compile.log')+'\n'+log[-3500:])
+    compile_model(tool,content,out/'player.qc',out/'compile.log',compiled)
+    hand_bones=reference_bones(root,'models/weapons/c_arms_citizen.mdl')
+    hands_fit=export_hands(out/'reference.smd',bones,hand_bones,out/'hands.smd')
+    (out/'hands_idle.smd').write_text('\n'.join(smd_header(hand_bones))+'\n',encoding='utf-8')
+    relative_hands='avatarbridge/'+token+'/c_arms.mdl'
+    hands_qc=[f'$modelname "{relative_hands}"','$body "arms" "hands.smd"',f'$cdmaterials "{namespace}"',
+        '$surfaceprop "flesh"','$mostlyopaque','$ambientboost','$illumposition 0 0 0',
+        '$sequence "idle" "hands_idle.smd" fps 30','$includemodel "weapons/c_arms_animations.mdl"',*define_bones(hand_bones)]
+    (out/'hands.qc').write_text('\n'.join(hands_qc)+'\n',encoding='utf-8')
+    compile_model(tool,content,out/'hands.qc',out/'hands-compile.log',content/'models'/relative_hands)
     shutil.copytree(content/'models',addon/'models')
     model = 'models/'+relative_model
+    hands_model='models/'+relative_hands
     lua = addon/'lua/autorun'/('avatarbridge_'+token+'.lua'); lua.parent.mkdir(parents=True)
     title = report.get('name','Avatar'); category = report.get('category','Avatar Bridge')
     # JSON string quoting is also valid Lua for these user-visible values.
     quote = lambda s: json.dumps(s,ensure_ascii=False).replace('\\/','/')
     lua.write_text('if SERVER then AddCSLuaFile() end\n'+
         f'player_manager.AddValidModel({quote(token)}, {quote(model)}, {quote(title)}, {quote(category)})\n'+
+        f'player_manager.AddValidHands({quote(token)}, {quote(hands_model)}, 0, "00000000")\n'+
         f'list.Set("PlayerOptionsModel", {quote(title)}, {quote(model)})\n'+
         f'if CLIENT and game.SinglePlayer() then hook.Add("InitPostEntity", "{token}_select", function() RunConsoleCommand("cl_playermodel", "{token}") end) end\n',encoding='utf-8')
     (addon/'addon.json').write_text(json.dumps({'title':title+' - Avatar Bridge','type':'model','tags':['roleplay','fun'],'ignore':['*.log']},indent=2),encoding='utf-8')
     result = {'target':'gmod','builder_version':VERSION,'job':str(job),'addon':str(addon),'token':token,'model':model,
               'triangles':triangles,'bones':len(bones),'tail_jiggle_bones':len(tail),'physics_bodies':len(PHYSICS_PARTS),
               'geometry_fit':geometry_fit,'runtime_verified':False,'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
+    result.update(hands_model=hands_model,hands=hands_fit)
     (job/'gmod-build.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
     return result
 

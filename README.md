@@ -1,6 +1,13 @@
 # Avatar Bridge
 
-## Versione universale 0.7.5
+## Versione universale 0.7.6
+
+La 0.7.6 genera braccia e mani dell'avatar per la prima persona e le collega
+al playermodel tramite il sistema c_hands di GMod. Le dita seguono le animazioni
+di impugnatura e ricarica delle armi. Funziona con le armi standard e gli addon
+compatibili con c_hands; armi che incorporano altre mani nel proprio modello
+richiedono un adattamento specifico. Ricompila gli avatar precedenti con
+**Installa avatar**, a gioco chiuso.
 
 La 0.7.5 raccorda il bacino agli attacchi anatomici delle cosce e adatta la
 lunghezza dei segmenti fino a ginocchia e caviglie. I vertici coincidenti
@@ -35,7 +42,7 @@ La libreria sorgente e l'anteprima 360 sono condivise fra gli adattatori:
   rig ValveBiped, animazioni standard, texture VTF/VMT e ragdoll.
   Richiede una base umanoide riconosciuta e Garry's Mod installato da Steam.
   La coda usa fisica jigglebone nativa; il volto rimane neutro.
-  Le mani in prima persona sono quelle standard del gioco. Il risultato
+  Le mani in prima persona sono estratte dall'avatar e usano il rig c_hands. Il risultato
   estetico e le animazioni richiedono una verifica per ogni modello.
 - **Cyberpunk 2077**: conserva la conversione precedente e i suoi requisiti.
 - **GLB universale (export)**: esporta scheletro e texture incorporati.
