@@ -16,7 +16,7 @@ from PIL import Image
 from scipy.spatial.transform import Rotation
 import bridge as b
 
-VERSION = 3
+VERSION = 4
 
 
 def game_root(path):
@@ -140,6 +140,26 @@ def frame(axis, forward):
     return np.column_stack([x, np.cross(z, x), z])
 
 
+def segment_transform(start, end, target_start, target_end, forward):
+    """Map both joint endpoints, retaining the transverse mesh thickness."""
+    source_axis=end-start; target_axis=target_end-target_start
+    source_length=np.linalg.norm(source_axis); target_length=np.linalg.norm(target_axis)
+    if min(source_length,target_length)<.01: raise ValueError('Segmento anatomico troppo corto')
+    linear=frame(target_axis,forward)@np.diag([target_length/source_length,1.,1.])@frame(source_axis,forward).T
+    result=np.eye(4); result[:3,:3]=linear; result[:3,3]=target_start-linear@start
+    return result
+
+
+def torso_transform(hips, chest, target_hips, target_chest, width_scale=1.):
+    """Keep pelvis cross sections upright while matching hip/chest heights."""
+    source=chest-hips; target=target_chest-target_hips
+    if source[2]<.01 or target[2]<.01: raise ValueError('Altezza del busto non valida')
+    linear=np.eye(3);linear[0,0]=width_scale
+    linear[:,2]+=(target-linear@source)/source[2]
+    result=np.eye(4); result[:3,:3]=linear; result[:3,3]=target_hips-linear@hips
+    return result
+
+
 def skeleton(doc, binary, reference):
     """Fit recognized humanoid chains to the game's bind pose; retain tail bones."""
     from cp77 import world_matrices
@@ -160,6 +180,34 @@ def skeleton(doc, binary, reference):
     conversion = np.array([[1.,0.,0.],[0.,0.,-1.],[0.,1.,0.]])
     positions = [conversion @ world[i][:3,3] * 39.37007874 for i in joints]
     anchor = {a:positions[i] for i,a in enumerate(aliases) if a in target}
+    hip_name='ValveBiped.Bip01_Pelvis'
+    thighs=['ValveBiped.Bip01_'+side+'_Thigh' for side in ['L','R']]
+    # The source Hips controller may be on the abdomen, well above the hip
+    # sockets. Use the actual paired thigh origins for anatomical placement.
+    anchor[hip_name]=(anchor[thighs[0]]+anchor[thighs[1]])*.5
+    hip_width_scale=(np.linalg.norm(reference[target[thighs[0]]]['world'][:3,3]-reference[target[thighs[1]]]['world'][:3,3]) /
+                     np.linalg.norm(anchor[thighs[0]]-anchor[thighs[1]]))
+    foot_ids=[i for i,name in enumerate(names) if aliases[i] in {
+        'ValveBiped.Bip01_L_Foot','ValveBiped.Bip01_R_Foot','ValveBiped.Bip01_L_Toe0','ValveBiped.Bip01_R_Toe0'}
+        or name.lower().startswith('toe')]
+    ground=[]
+    for node_index,node in enumerate(nodes):
+        if 'mesh' not in node or node.get('skin')!=0: continue
+        for primitive in doc['meshes'][node['mesh']]['primitives']:
+            a=primitive['attributes']
+            if not all(k in a for k in ['POSITION','JOINTS_0','WEIGHTS_0']): continue
+            used=np.unique(b.accessor_array(doc,binary,primitive['indices']).astype(int))
+            p=b.accessor_array(doc,binary,a['POSITION'])[used]
+            js=b.accessor_array(doc,binary,a['JOINTS_0'])[used]
+            ws=b.accessor_array(doc,binary,a['WEIGHTS_0'])[used]
+            points=(p@world[node_index][:3,:3].T+world[node_index][:3,3])@conversion.T*39.37007874
+            selected=(ws*np.isin(js,foot_ids)).sum(1)>.5
+            if selected.any(): ground.extend(points[selected,2])
+    floor=float(np.min(ground)) if ground else 0.
+    for side in ['L','R']:
+        name='ValveBiped.Bip01_'+side+'_Foot'
+        anchor[name]=anchor[name].copy()
+        anchor[name][2]=floor+reference[target[name]]['world'][2,3]
     def is_descendant(child, ancestor):
         current = reference[target[child]]['parent']
         while current >= 0:
@@ -177,31 +225,44 @@ def skeleton(doc, binary, reference):
     for i, alias in enumerate(aliases):
         if alias not in target:
             transforms.append(None); continue
-        dest = reference[target[alias]]['world'][:3,3]
+        start=anchor[alias]; dest = reference[target[alias]]['world'][:3,3]
         # Skip missing intermediate joints and zero-length source segments.
         # Rexouium's Hips and Spine coincide: normalizing their tiny numerical
         # difference used to bend the entire hip-bound surface sideways.
         children = [a for a in anchor if is_descendant(a,alias)
-                    and np.linalg.norm(anchor[a]-positions[i]) > .01]
+                    and np.linalg.norm(anchor[a]-start) > .01]
         children.sort(key=lambda a:(depth(a),target[a]))
         if alias.endswith('_Pelvis'):
             torso = [a for a in children if any(part in a for part in ['_Spine','_Neck','_Head'])]
             if torso: children = torso
         if children:
             child = children[0]
-            rotation = frame(reference[target[child]]['world'][:3,3]-dest, forward) @ frame(anchor[child]-positions[i], forward).T
+            transform=segment_transform(start,anchor[child],dest,reference[target[child]]['world'][:3,3],forward)
         else:
             parent = reference[target[alias]]['parent']
             while parent >= 0:
                 parentname = reference[parent]['name']
-                if parentname in anchor and np.linalg.norm(positions[i]-anchor[parentname]) > .01: break
+                if parentname in anchor and np.linalg.norm(start-anchor[parentname]) > .01: break
                 parent = reference[parent]['parent']
             rotation = (frame(dest-reference[parent]['world'][:3,3], forward) @
-                        frame(positions[i]-anchor[reference[parent]['name']], forward).T) if parent >= 0 else np.eye(3)
-        if not np.allclose(rotation.T @ rotation,np.eye(3),atol=1e-6) or not np.isclose(np.linalg.det(rotation),1,atol=1e-6):
-            raise ValueError('Rotazione del rig non valida: '+names[i])
-        transform = np.eye(4); transform[:3,:3] = rotation; transform[:3,3] = dest - rotation @ positions[i]
+                        frame(start-anchor[reference[parent]['name']], forward).T) if parent >= 0 else np.eye(3)
+            transform=np.eye(4);transform[:3,:3]=rotation;transform[:3,3]=dest-rotation@start
+        if alias.endswith('_Foot'):
+            transform=np.eye(4);transform[:3,3]=dest-start
+        if alias in {hip_name,'ValveBiped.Bip01_Spine'} and 'ValveBiped.Bip01_Spine2' in anchor:
+            chest_name='ValveBiped.Bip01_Spine2'
+            transform=torso_transform(anchor[hip_name],anchor[chest_name],
+                reference[target[hip_name]]['world'][:3,3],reference[target[chest_name]]['world'][:3,3],hip_width_scale)
+        if not np.isfinite(transform).all() or np.linalg.det(transform[:3,:3])<1e-6:
+            raise ValueError('Trasformazione anatomica non valida: '+names[i])
         transforms.append(transform)
+    # Source paw/toe joints sit close to the ankle, unlike the long human toe
+    # lever in ValveBiped. Preserve the paw as one foot-bound surface instead
+    # of stretching its toe vertices to a different anatomical joint.
+    for i,alias in enumerate(aliases):
+        if alias and alias.endswith('_Toe0'):
+            foot=alias.removesuffix('Toe0')+'Foot'
+            transforms[i]=transforms[aliases.index(foot)].copy();aliases[i]=foot
     remap = []; output = list(reference)
     for i, node in enumerate(joints):
         if aliases[i] in target:
@@ -277,47 +338,79 @@ def smd_header(bones):
     return lines+['end']
 
 
-def export_mesh(doc, binary, bones, remap, transforms, conversion, matnames, path):
+def shared_bindings(positions, dense):
+    """Share coincident source vertices before limiting Source's three weights.
+
+    UV/material duplicates retain their own normals and UVs, but use exactly
+    the same position and final bone weights in every animation.
+    """
+    _,groups=np.unique(np.round(positions,4),axis=0,return_inverse=True)
+    count=np.bincount(groups); size=len(count)
+    points=np.zeros((size,3)); weights=np.zeros((size,dense.shape[1]))
+    np.add.at(points,groups,positions); np.add.at(weights,groups,dense)
+    points/=count[:,None]; weights/=count[:,None]
+    joints=np.argsort(-weights,axis=1,kind='stable')[:,:3]
+    weights=np.take_along_axis(weights,joints,axis=1)
+    weights/=weights.sum(1,keepdims=True)
+    return points,joints,weights,groups,int((count>1).sum())
+
+
+def export_mesh(doc, binary, bones, remap, transforms, conversion, matnames, path, diagnostics=None):
     from cp77 import world_matrices
-    world = world_matrices(doc); lines = smd_header(bones)+['triangles']; count = 0
+    world=world_matrices(doc); records=[]; count=0
+    target_transforms=np.zeros((len(bones),4,4)); seen=set()
+    for source,target in enumerate(remap):
+        if target in seen:
+            if not np.allclose(target_transforms[target],transforms[source],atol=1e-6):
+                raise ValueError('Pesi rimappati con trasformazioni anatomiche diverse')
+        else:
+            seen.add(int(target)); target_transforms[target]=transforms[source]
     for node_index,node in enumerate(doc['nodes']):
         if 'mesh' not in node: continue
-        if node.get('skin') != 0:
-            raise ValueError('La mesh deve essere collegata al rig umanoide.')
+        if node.get('skin')!=0: raise ValueError('La mesh deve essere collegata al rig umanoide.')
         for primitive in doc['meshes'][node['mesh']]['primitives']:
-            attributes = primitive['attributes']
+            attributes=primitive['attributes']
             if primitive.get('mode',4)!=4 or not all(k in attributes for k in ['POSITION','NORMAL','TEXCOORD_0','JOINTS_0','WEIGHTS_0']):
                 raise ValueError('Mesh triangolata, UV, normali e pesi richiesti.')
-            read = lambda key:b.accessor_array(doc,binary,attributes[key])
-            p = read('POSITION'); normals = read('NORMAL'); uv = read('TEXCOORD_0')
-            joint = read('JOINTS_0').astype(int); weight = read('WEIGHTS_0').astype(float)
+            indices=b.accessor_array(doc,binary,primitive['indices']).astype(int).reshape(-1,3)
+            used,faces=np.unique(indices,return_inverse=True)
+            read=lambda key:b.accessor_array(doc,binary,attributes[key])[used]
+            points=read('POSITION'); normals=read('NORMAL'); uv=read('TEXCOORD_0')
+            joint=read('JOINTS_0').astype(int); weight=read('WEIGHTS_0').astype(float)
             if not np.isfinite(weight).all() or (weight<0).any() or (weight.sum(1)<=0).any():
                 raise ValueError('Pesi scheletro non validi')
-            order = np.argsort(-weight,axis=1)[:,:3]; joint = np.take_along_axis(joint,order,1); weight = np.take_along_axis(weight,order,1)
-            weight /= weight.sum(1,keepdims=True)
-            transform = world[node_index]
-            p = ((p @ transform[:3,:3].T)+transform[:3,3]) @ conversion.T * 39.37007874
-            normals = normals @ np.linalg.inv(transform[:3,:3]) @ conversion.T
-            out = np.zeros_like(p); outnormal = np.zeros_like(normals)
-            for column in range(3):
-                tr = transforms[joint[:,column]]
-                out += (np.einsum('nij,nj->ni',tr[:,:3,:3],p)+tr[:,:3,3])*weight[:,column,None]
-                outnormal += np.einsum('nij,nj->ni',tr[:,:3,:3],normals)*weight[:,column,None]
-            outnormal /= np.maximum(np.linalg.norm(outnormal,axis=1,keepdims=True),1e-10)
-            faces = b.accessor_array(doc,binary,primitive['indices']).astype(int).reshape(-1,3)
-            vertexlines = []
-            for vertex in range(len(p)):
-                influences = {}
-                for j,w in zip(remap[joint[vertex]],weight[vertex]):
-                    influences[int(j)] = influences.get(int(j),0)+float(w)
-                links = [(j,w) for j,w in influences.items() if w>1e-7]
-                values = np.r_[out[vertex],outnormal[vertex],uv[vertex,0],1-uv[vertex,1]]
-                vertexlines.append(str(links[0][0])+' '+' '.join(f'{v:.7f}' for v in values)+' '+str(len(links))+' '+' '.join(f'{j} {w:.8f}' for j,w in links))
-            for face in faces:
-                lines.append(matnames[primitive.get('material',0)])
-                lines.extend(vertexlines[i] for i in face)
-            count += len(faces)
-    lines.append('end'); Path(path).write_text('\n'.join(lines)+'\n',encoding='utf-8')
+            # Merge collapsed source joints before truncation; otherwise three
+            # toe/helper weights can exclude an important hip or foot weight.
+            dense=np.zeros((len(points),len(bones)))
+            np.add.at(dense,(np.arange(len(points))[:,None],remap[joint]),weight)
+            transform=world[node_index]
+            points=(points@transform[:3,:3].T+transform[:3,3])@conversion.T*39.37007874
+            normals=normals@np.linalg.inv(transform[:3,:3])@conversion.T
+            records.append(dict(points=points,normals=normals,uv=uv,dense=dense,
+                faces=faces.reshape(-1,3),material=matnames[primitive.get('material',0)]))
+            count+=len(indices)
+    all_points=np.concatenate([r['points'] for r in records]); all_dense=np.concatenate([r['dense'] for r in records])
+    points,joints,weights,groups,seams=shared_bindings(all_points,all_dense)
+    blend=(target_transforms[joints]*weights[:,:,None,None]).sum(1)
+    out=np.einsum('nij,nj->ni',blend[:,:3,:3],points)+blend[:,:3,3]
+    normal_transforms=np.linalg.inv(blend[:,:3,:3]).transpose(0,2,1)
+    lines=smd_header(bones)+['triangles']; offset=0
+    for record in records:
+        amount=len(record['points']); ids=groups[offset:offset+amount]; offset+=amount
+        normals=np.einsum('nij,nj->ni',normal_transforms[ids],record['normals'])
+        normals/=np.maximum(np.linalg.norm(normals,axis=1,keepdims=True),1e-10)
+        vertexlines=[]
+        for vertex,group in enumerate(ids):
+            links=[(int(j),float(w)) for j,w in zip(joints[group],weights[group]) if w>1e-7]
+            values=np.r_[out[group],normals[vertex],record['uv'][vertex,0],1-record['uv'][vertex,1]]
+            vertexlines.append(str(links[0][0])+' '+' '.join(f'{v:.7f}' for v in values)+' '+str(len(links))+' '+' '.join(f'{j} {w:.8f}' for j,w in links))
+        for face in record['faces']:
+            lines.append(record['material']); lines.extend(vertexlines[i] for i in face)
+    Path(path).write_text('\n'.join(lines+['end'])+'\n',encoding='utf-8')
+    if diagnostics is not None:
+        diagnostics.update(source_vertices=len(all_points),shared_bind_vertices=len(points),
+            shared_seam_groups=seams,triangles_preserved=count,
+            method='anatomical hip center; connected segment lengths; rigid paws; shared source seams')
     return count
 
 
@@ -419,7 +512,8 @@ def build(job_path, game_path):
     bones,remap,transforms,conversion = skeleton(doc,binary,reference_bones(root))
     tail = tail_dynamics(bones)
     matnames = materials(doc,binary,addon/'materials'/namespace,namespace)
-    triangles = export_mesh(doc,binary,bones,remap,transforms,conversion,matnames,out/'reference.smd')
+    geometry_fit={}
+    triangles = export_mesh(doc,binary,bones,remap,transforms,conversion,matnames,out/'reference.smd',geometry_fit)
     write_physics(bones,out/'physics.smd')
     (out/'idle.smd').write_text('\n'.join(smd_header(bones))+'\n',encoding='utf-8')
     relative_model = 'avatarbridge/'+token+'/player.mdl'
@@ -455,7 +549,7 @@ def build(job_path, game_path):
     (addon/'addon.json').write_text(json.dumps({'title':title+' - Avatar Bridge','type':'model','tags':['roleplay','fun'],'ignore':['*.log']},indent=2),encoding='utf-8')
     result = {'target':'gmod','builder_version':VERSION,'job':str(job),'addon':str(addon),'token':token,'model':model,
               'triangles':triangles,'bones':len(bones),'tail_jiggle_bones':len(tail),'physics_bodies':len(PHYSICS_PARTS),
-              'runtime_verified':False,'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
+              'geometry_fit':geometry_fit,'runtime_verified':False,'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest()}
     (job/'gmod-build.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
     return result
 

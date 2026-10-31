@@ -14,6 +14,49 @@ from PIL import Image
 
 
 class GmodTests(unittest.TestCase):
+    def test_leg_segments_meet_at_the_same_knee_without_changing_width(self):
+        forward=np.array([0.,-1.,0.])
+        hip=np.array([4.,1.,40.]); knee=np.array([4.,0.,23.]); ankle=np.array([4.,3.,4.])
+        target_hip=np.array([4.,0.,39.]); target_knee=np.array([4.,.4,21.]); target_ankle=np.array([4.,1.8,4.])
+        thigh=gmod.segment_transform(hip,knee,target_hip,target_knee,forward)
+        calf=gmod.segment_transform(knee,ankle,target_knee,target_ankle,forward)
+        for source,destination in [(hip,target_hip),(knee,target_knee)]:
+            np.testing.assert_allclose((thigh@np.r_[source,1])[:3],destination,atol=1e-10)
+        for source,destination in [(knee,target_knee),(ankle,target_ankle)]:
+            np.testing.assert_allclose((calf@np.r_[source,1])[:3],destination,atol=1e-10)
+        self.assertAlmostEqual(np.linalg.norm(thigh[:3,:3]@np.array([1.,0.,0.])),1)
+
+    def test_pelvis_field_preserves_cross_sections_and_hip_chest_connections(self):
+        hips=np.array([0.,1.5,40.]); chest=np.array([0.,.1,55.])
+        target_hips=np.array([0.,-.5,39.]); target_chest=np.array([0.,3.2,50.])
+        tr=gmod.torso_transform(hips,chest,target_hips,target_chest)
+        for source,destination in [(hips,target_hips),(chest,target_chest)]:
+            np.testing.assert_allclose((tr@np.r_[source,1])[:3],destination,atol=1e-10)
+        np.testing.assert_allclose(tr[:3,:3]@np.array([1.,0.,0.]),[1,0,0])
+        np.testing.assert_allclose(tr[:3,:3]@np.array([0.,1.,0.]),[0,1,0])
+
+    def test_anatomical_hip_field_meets_both_thigh_sockets(self):
+        hips=np.array([0.,1.5,40.]);chest=np.array([0.,.1,55.])
+        tr=gmod.torso_transform(hips,chest,np.array([0.,-.5,39.]),np.array([0.,3.,50.]),.8)
+        for side in [-1,1]:
+            source=hips+np.array([side*5.,0,0])
+            expected=np.array([side*4.,-.5,39.])
+            np.testing.assert_allclose((tr@np.r_[source,1])[:3],expected,atol=1e-10)
+
+    def test_uv_seam_duplicates_keep_one_binding_in_bent_poses(self):
+        p=np.array([[0.,0.,40.],[0.,0.,40.],[1.,0.,35.]])
+        dense=np.array([[.6,.3,.1,0],[.1,.5,.1,.3],[0,0,1,0.]])
+        points,joints,weights,groups,seams=gmod.shared_bindings(p,dense)
+        self.assertEqual(seams,1);self.assertEqual(groups[0],groups[1])
+        self.assertEqual(joints.shape[1],3)
+        np.testing.assert_allclose(weights.sum(1),1)
+        rotations=np.repeat(np.eye(4)[None,:,:],4,axis=0)
+        rotations[1,:3,:3]=np.array([[1,0,0],[0,.5,-np.sqrt(.75)],[0,np.sqrt(.75),.5]])
+        rotations[2,:3,3]=[0,3,-5]
+        blend=(rotations[joints]*weights[:,:,None,None]).sum(1)
+        posed=np.einsum('nij,nj->ni',blend[:,:3,:3],points)+blend[:,:3,3]
+        np.testing.assert_array_equal(posed[groups[0]],posed[groups[1]])
+
     def test_tail_jiggle_axes_follow_the_chain_without_moving_bind_origins(self):
         bones=[]
         for i,position in enumerate([(0,0,40),(0,3,36),(0,10,35),(0,18,33)]):

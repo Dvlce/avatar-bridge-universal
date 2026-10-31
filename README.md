@@ -1,6 +1,13 @@
 # Avatar Bridge
 
-## Versione universale 0.7.4
+## Versione universale 0.7.5
+
+La 0.7.5 raccorda il bacino agli attacchi anatomici delle cosce e adatta la
+lunghezza dei segmenti fino a ginocchia e caviglie. I vertici coincidenti
+fra cuciture UV/materiali condividono posizione e pesi anche durante le pose.
+Le ossa delle dita delle zampe sono unite al piede prima di limitare i pesi,
+evitando di stirarle sul lungo osso dell'alluce umano. Coda fisica e ragdoll
+articolato restano attivi. Ricompila gli avatar precedenti con **Installa avatar**.
 
 La 0.7.4 aggiunge la fisica nativa della coda: la radice segue il bacino e
 le sei articolazioni successive del Rexouium usano jigglebone con lunghezza
