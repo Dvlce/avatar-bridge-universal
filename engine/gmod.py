@@ -16,7 +16,7 @@ from PIL import Image
 from scipy.spatial.transform import Rotation
 import bridge as b
 
-VERSION = 1
+VERSION = 2
 
 
 def game_root(path):
@@ -128,11 +128,15 @@ def bone_alias(value):
 
 
 def frame(axis, forward):
-    x = axis / max(np.linalg.norm(axis), 1e-10)
+    length = np.linalg.norm(axis)
+    if length < 1e-5:
+        raise ValueError('Due articolazioni coincidenti non definiscono una rotazione.')
+    x = axis / length
     z = forward - x * (x @ forward)
     if np.linalg.norm(z) < 1e-5:
-        forward = np.array([0., 1., 0.]); z = forward - x * (x @ forward)
-    z /= max(np.linalg.norm(z), 1e-10)
+        fallback = np.eye(3)[np.argmin(np.abs(x))]
+        z = fallback - x * (x @ fallback)
+    z /= np.linalg.norm(z)
     return np.column_stack([x, np.cross(z, x), z])
 
 
@@ -151,28 +155,51 @@ def skeleton(doc, binary, reference):
                if 'ValveBiped.Bip01_'+n not in aliases]
     if missing:
         raise ValueError('Mapping umanoide incompleto: ' + ', '.join(missing))
-    # glTF +Y up/+Z backwards -> Source +Z up/+X forward. Det = +1.
-    conversion = np.array([[0.,0.,-1.],[-1.,0.,0.],[0.,1.,0.]])
+    # Prepared humanoids have left +X, up +Y, forward +Z. ValveBiped's
+    # reference SMD has left +X, up +Z, forward -Y (not forward +X).
+    conversion = np.array([[1.,0.,0.],[0.,0.,-1.],[0.,1.,0.]])
     positions = [conversion @ world[i][:3,3] * 39.37007874 for i in joints]
     anchor = {a:positions[i] for i,a in enumerate(aliases) if a in target}
+    def is_descendant(child, ancestor):
+        current = reference[target[child]]['parent']
+        while current >= 0:
+            if current == target[ancestor]: return True
+            current = reference[current]['parent']
+        return False
+    def depth(name):
+        result = 0; current = target[name]
+        while reference[current]['parent'] >= 0:
+            result += 1; current = reference[current]['parent']
+        return result
+    forward = np.array([0.,-1.,0.])
     def tail_name(n): return bool(re.fullmatch(r'tail(?:rt|root|[0-9]+)?', re.sub('[^a-z0-9]', '', n.lower())))
     transforms = []
     for i, alias in enumerate(aliases):
         if alias not in target:
             transforms.append(None); continue
         dest = reference[target[alias]]['world'][:3,3]
-        children = [a for a in anchor if reference[target[a]]['parent'] == target[alias]]
-        if not children:
-            descendant = [a for a in anchor if target[a] > target[alias] and a.startswith(alias.split('_Finger')[0]+'_Finger')]
-            children = descendant[:1] if '_Hand' in alias else []
+        # Skip missing intermediate joints and zero-length source segments.
+        # Rexouium's Hips and Spine coincide: normalizing their tiny numerical
+        # difference used to bend the entire hip-bound surface sideways.
+        children = [a for a in anchor if is_descendant(a,alias)
+                    and np.linalg.norm(anchor[a]-positions[i]) > .01]
+        children.sort(key=lambda a:(depth(a),target[a]))
+        if alias.endswith('_Pelvis'):
+            torso = [a for a in children if any(part in a for part in ['_Spine','_Neck','_Head'])]
+            if torso: children = torso
         if children:
             child = children[0]
-            rotation = frame(reference[target[child]]['world'][:3,3]-dest, np.array([1.,0.,0.])) @ frame(anchor[child]-positions[i], np.array([1.,0.,0.])).T
+            rotation = frame(reference[target[child]]['world'][:3,3]-dest, forward) @ frame(anchor[child]-positions[i], forward).T
         else:
             parent = reference[target[alias]]['parent']
-            parentname = reference[parent]['name'] if parent >= 0 else None
-            rotation = (frame(dest-reference[parent]['world'][:3,3], np.array([1.,0.,0.])) @
-                        frame(positions[i]-anchor[parentname], np.array([1.,0.,0.])).T) if parentname in anchor else np.eye(3)
+            while parent >= 0:
+                parentname = reference[parent]['name']
+                if parentname in anchor and np.linalg.norm(positions[i]-anchor[parentname]) > .01: break
+                parent = reference[parent]['parent']
+            rotation = (frame(dest-reference[parent]['world'][:3,3], forward) @
+                        frame(positions[i]-anchor[reference[parent]['name']], forward).T) if parent >= 0 else np.eye(3)
+        if not np.allclose(rotation.T @ rotation,np.eye(3),atol=1e-6) or not np.isclose(np.linalg.det(rotation),1,atol=1e-6):
+            raise ValueError('Rotazione del rig non valida: '+names[i])
         transform = np.eye(4); transform[:3,:3] = rotation; transform[:3,3] = dest - rotation @ positions[i]
         transforms.append(transform)
     remap = []; output = list(reference)

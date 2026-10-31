@@ -1,6 +1,12 @@
 # Avatar Bridge
 
-## Versione universale 0.7.2
+## Versione universale 0.7.3
+
+La 0.7.3 corregge l'orientamento del playermodel GMod: allinea gli assi della
+base al riferimento ValveBiped e salta le articolazioni coincidenti durante
+il calcolo delle rotazioni. Le basi Rexouium con Hips e Spine nella stessa
+posizione conservano un busto stabile. Gli avatar GMod installati prima di
+questa versione vanno ricompilati con **Installa avatar**, a gioco chiuso.
 
 Apri **Avatar Bridge - Preview 360** sul desktop. Scegli **Garry's Mod** in alto,
 carica Xeno e premi **Installa avatar** a gioco chiuso. Nel gioco apri il menu C,

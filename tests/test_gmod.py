@@ -5,6 +5,7 @@ import struct
 import sys
 import tempfile
 import unittest
+import numpy as np
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'engine'))
 import bridge
@@ -13,6 +14,42 @@ from PIL import Image
 
 
 class GmodTests(unittest.TestCase):
+    def test_frames_are_rotations_even_when_axis_is_parallel_to_forward(self):
+        for axis in [np.array([0.,-2.,0.]), np.array([0.,0.,3.]), np.array([2.,1.,.2])]:
+            rotation = gmod.frame(axis,np.array([0.,-1.,0.]))
+            np.testing.assert_allclose(rotation.T@rotation,np.eye(3),atol=1e-12)
+            self.assertAlmostEqual(np.linalg.det(rotation),1.)
+        with self.assertRaises(ValueError):
+            gmod.frame(np.zeros(3),np.array([0.,-1.,0.]))
+
+    def test_coincident_hips_spine_do_not_twist_an_aligned_humanoid(self):
+        definitions = [('Hips','Pelvis',None,(0,0,40)),('Spine','Spine','Pelvis',(0,0,44)),
+            ('Chest','Spine2','Spine',(0,0,52)),('Neck','Neck1','Spine2',(0,0,60)),('Head','Head1','Neck1',(0,0,64))]
+        for side,letter,sign in [('Left','L',1),('Right','R',-1)]:
+            definitions += [(side+' arm',letter+'_UpperArm','Spine2',(sign*8,0,57)),
+                (side+' elbow',letter+'_Forearm',letter+'_UpperArm',(sign*15,0,50)),
+                (side+' wrist',letter+'_Hand',letter+'_Forearm',(sign*22,0,43)),
+                (side+' leg',letter+'_Thigh','Pelvis',(sign*4,0,40)),
+                (side+' knee',letter+'_Calf',letter+'_Thigh',(sign*4,0,22)),
+                (side+' ankle',letter+'_Foot',letter+'_Calf',(sign*4,0,4))]
+        conversion=np.array([[1.,0.,0.],[0.,0.,-1.],[0.,1.,0.]])
+        reference=[]; nodes=[]; indices={}
+        for source,name,parent,position in definitions:
+            index=len(reference); indices[name]=index
+            world=np.eye(4); world[:3,3]=position
+            parentindex=indices[parent] if parent else -1
+            local=np.linalg.inv(reference[parentindex]['world'])@world if parent else world.copy()
+            reference.append(dict(name='ValveBiped.Bip01_'+name,parent=parentindex,world=world,local=local))
+            sourceposition=np.array([0.,0.,40.]) if source=='Spine' else np.array(position,dtype=float)
+            nodes.append(dict(name=source,translation=(conversion.T@sourceposition/39.37007874).tolist()))
+        doc={'nodes':nodes,'skins':[{'joints':list(range(len(nodes)))}]}
+        _,remap,transforms,actual_conversion=gmod.skeleton(doc,b'',reference)
+        np.testing.assert_array_equal(actual_conversion,conversion)
+        for index,tr in enumerate(transforms):
+            np.testing.assert_allclose(tr[:3,:3],np.eye(3),atol=1e-8,err_msg=nodes[index]['name'])
+            self.assertAlmostEqual(tr[0,3],0,places=7)
+        self.assertEqual(remap[0],0)
+
     def test_equivalent_game_paths_share_installation_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)/'GarrysMod'
